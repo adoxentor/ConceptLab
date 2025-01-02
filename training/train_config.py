@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Dict
 from pathlib import Path
 
 from training.templates import LearnableProperties
@@ -67,7 +67,11 @@ class TrainConfig:
     optimize_in_text_space: bool = False
     # Use online VLM
     use_online_vlm: bool = False
-    
+    # VLM question to ask for object/style identification
+    vlm_question: Optional[str] = None
+    # List of prompts to use for generation
+    generation_prompts: List[str] = field(default_factory=list)
+
     def __post_init__(self):
         self.output_dir.mkdir(exist_ok=True, parents=True)
         if len(self.positive_classes) == 0:
@@ -80,4 +84,26 @@ class TrainConfig:
             raise ValueError('num positive_weights != num positive_classes')
         self.images_root = self.output_dir / "images"
         self.images_root.mkdir(exist_ok=True, parents=True)
+
+        # Set default VLM question based on learnable property
+        if self.vlm_question is None:
+            if self.learnable_property == LearnableProperties.object:
+                self.vlm_question = "What kind of {token} is in this photo?"
+            else:
+                self.vlm_question = "What art style was used in this photo of a horse and a barn?"
+
+        # Set default generation prompts if not provided
+        if not self.generation_prompts:
+            if self.learnable_property == LearnableProperties.style:
+                self.generation_prompts = [
+                    "a painting of a horse and a barn in a valley in the style of {token}",
+                    "a painting of a dog in the style of {token}",
+                    "a painting of fruit bowl in the style of {token}"
+                ]
+            else:  # object mode
+                self.generation_prompts = [
+                    "Professional high-quality art of a {token}. photorealistic, 4k, HQ",
+                    "a photo of a {token}",
+                    "a {token} in the wild"
+                ]
 

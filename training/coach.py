@@ -53,14 +53,9 @@ class Coach:
         return model
 
     def query_vlm(self, sampled_image) -> str:
-        if self.cfg.learnable_property == LearnableProperties.object:
-            question = f"What kind of {self.cfg.positive_classes[0]} is in this photo?"
-        elif self.cfg.learnable_property == LearnableProperties.style:
-            # NOTE: We specifically specify the content to avoid the model adding it to the answer
-            # Currently hard-coded to match the images generated in the style mode
-            question = f"What art style was used in this photo of a horse and a barn?"
-        else:
-            raise ValueError(f"Unknown learnable property: {self.cfg.learnable_property}")
+        # Format the question template with the appropriate token
+        question = self.cfg.vlm_question.format(token=self.cfg.positive_classes[0])
+
 
         with torch.no_grad():
             inputs = self.blip_processor(sampled_image, question, return_tensors="pt").to("cuda", torch.float16)
@@ -76,16 +71,8 @@ class Coach:
         return negative_cls
 
     def save_images(self, save_dir: Path, save_prefix: str):
-        if self.cfg.learnable_property == LearnableProperties.style:
-            prompts = [f"a painting of a horse and a barn in a valley in the style of {self.cfg.placeholder_token}",
-                       f"a painting of a dog in the style of {self.cfg.placeholder_token}",
-                       f"a painting of fruit bowl in the style of {self.cfg.placeholder_token}"]
-        else:
-            # First prompt is the one we are going to run blip against, this specific one works great with kandinsky
-            prompts = [f"Professional high-quality art of a {self.cfg.placeholder_token}. photorealistic, 4k, HQ",
-                       f"a photo of a {self.cfg.placeholder_token}",
-                       random.choice(object_templates_edits).format(a='a', token=self.cfg.placeholder_token)]
-
+        # Format each prompt template with the placeholder token
+        prompts = [prompt.format(token=self.cfg.placeholder_token) for prompt in self.cfg.generation_prompts]
         inference_seeds = self.cfg.inference_seeds
         images = []
         for prompt in prompts:
