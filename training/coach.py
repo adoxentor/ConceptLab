@@ -27,7 +27,7 @@ class Coach:
         self.cfg = config
         self._save_run_config()
         
-        if recycle_components is None:
+        if recycle_coach is None:
             # Standard initialization
             self.model = self.get_model()
             self.blip_processor, self.blip_model = self.load_blip_vlm()
