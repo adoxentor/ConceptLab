@@ -10,7 +10,7 @@ import numpy as np
 import pyrallis
 import torch
 import torch.nn as nn
-from PIL import Image
+from PIL import Image, ImageDraw
 from accelerate.utils import set_seed
 
 from kandinsky2 import Kandinsky2_1, load_utils
@@ -115,6 +115,55 @@ class Coach:
         Image.fromarray(gen_images).save(save_dir / f'{save_prefix}.jpeg')
         # We return the first output of set_b which will be optionally used by BLIP
         return images[0]
+
+    def create_training_summary(self):
+        """Creates a summary image combining all step images with their negative class captions"""
+        if not self.cfg.live_negatives or len(self.cfg.negative_classes) == 0:
+            return
+
+        images_dir = self.cfg.images_root
+        step_images = []
+        negative_classes = []
+        
+        # Collect all step images and their corresponding negative classes
+        for step in range(0, self.train_step + 1, self.cfg.log_image_frequency):
+            image_path = images_dir / f'{step}_step_images.jpeg'
+            if image_path.exists():
+                step_images.append(np.array(Image.open(image_path)))
+                if step > 0:  # Skip initial step as it has no negative class yet
+                    class_idx = (step // self.cfg.log_image_frequency) - 1
+                    if class_idx < len(self.cfg.negative_classes):
+                        negative_classes.append(self.cfg.negative_classes[class_idx])
+        
+        if not step_images:
+            return
+            
+        # Calculate dimensions for the combined image
+        text_height = 30  # Height for text area
+        img_height = step_images[0].shape[0]
+        img_width = step_images[0].shape[1]
+        total_height = (img_height + text_height) * len(step_images)
+        
+        # Create the combined image
+        combined_image = np.ones((total_height, img_width, 3), dtype=np.uint8) * 255
+        
+        # Add each image and its caption
+        for idx, img in enumerate(step_images):
+            y_offset = idx * (img_height + text_height)
+            
+            # Add the image
+            combined_image[y_offset + text_height:y_offset + text_height + img_height] = img
+            
+            # Add the caption
+            if idx > 0:  # Skip caption for initial image
+                pil_image = Image.fromarray(combined_image)
+                draw = ImageDraw.Draw(pil_image)
+                text = f"Added negative class: {negative_classes[idx-1]}"
+                draw.text((10, y_offset + 5), text, fill=(0, 0, 0))
+                combined_image = np.array(pil_image)
+        
+        # Save the final summary image
+        Image.fromarray(combined_image).save(self.cfg.output_dir / 'training_summary.jpeg')
 
     def load_blip_vlm(self) -> Tuple[Optional[torch.nn.Module], Optional[torch.nn.Module]]:
         if self.cfg.live_negatives:
@@ -280,14 +329,22 @@ class Coach:
         return text_embs_normed
 
     def train(self):
+        # Save initial state
+        if self.train_step == 0:
+            self.save_embeds(self.cfg.output_dir / "0_step_embeds.bin")
+            
         sampled_image = self.save_images(save_dir=self.cfg.images_root, save_prefix=f'init_images')
         if self.cfg.live_negatives and len(self.cfg.negative_classes) == 0:
             live_negative = self.query_vlm(sampled_image)
             self.cfg.negative_classes.append(live_negative)
+            # Save initial negative classes
+            self.save_embeds(self.cfg.output_dir / "0_step_embeds.bin")
         elif self.cfg.gradual_negatives:
             random.shuffle(self.cfg.negative_classes)
             self.cfg.negative_pool = copy(self.cfg.negative_classes)
             self.cfg.negative_classes = [self.cfg.negative_pool.pop(0)]
+            # Save initial negative classes
+            self.save_embeds(self.cfg.output_dir / "0_step_embeds.bin")
 
         distances_log: List[Dict[str, float]] = []
 
@@ -388,12 +445,21 @@ class Coach:
                     if self.cfg.live_negatives:
                         negative = self.query_vlm(sampled_image)
                         self.cfg.negative_classes.append(negative)
+                        # Save updated negative classes list
+                        with open(self.cfg.images_root / f'{self.train_step}_negative_classes.txt', 'w') as f:
+                            f.write('\n'.join(self.cfg.negative_classes))
                     elif self.cfg.gradual_negatives:
                         if len(self.cfg.negative_pool) > 0:
                             self.cfg.negative_classes.append(self.cfg.negative_pool.pop(0))
+                            # Save updated negative classes list
+                            with open(self.cfg.images_root / f'{self.train_step}_negative_classes.txt', 'w') as f:
+                                f.write('\n'.join(self.cfg.negative_classes))
 
             embed_save_path = self.cfg.output_dir / "learned_embeds.bin"
             self.save_embeds(embed_save_path)
+            
+            # Create the training summary image at the end
+            self.create_training_summary()
 
     def save_embeds(self, save_path: Path):
         t2_embeds = self.model.clip_model.token_embedding.weight[self.t2_place_token_id]
@@ -403,6 +469,18 @@ class Coach:
             },
         }
         torch.save(learned_embeds_dict, save_path)
+        
+        # Save negative classes alongside embeddings
+        if self.cfg.negative_classes:
+            neg_classes_path = save_path.parent / "images" / f"{self.train_step}_negative_classes.txt"
+            neg_classes_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(neg_classes_path, 'w') as f:
+                f.write('\n'.join(self.cfg.negative_classes))
+            
+            # Also save a copy without step number for easy access
+            main_neg_classes_path = save_path.parent / "images" / "negative_classes.txt"
+            with open(main_neg_classes_path, 'w') as f:
+                f.write('\n'.join(self.cfg.negative_classes))
 
     @staticmethod
     def plot_distances(distances_log: List[Dict[str, float]], output_path: Path):
