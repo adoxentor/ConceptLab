@@ -65,7 +65,9 @@ class TrainConfig:
     negatives_early_stop: bool = False
     # Whether to use CLIP-ConceptLab and optimize only in CLIP text space
     optimize_in_text_space: bool = False
-
+    # Use online VLM
+    use_online_vlm: bool = False
+    
     def __post_init__(self):
         self.output_dir.mkdir(exist_ok=True, parents=True)
         if len(self.positive_classes) == 0:

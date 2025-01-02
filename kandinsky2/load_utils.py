@@ -2,7 +2,7 @@ import os
 from copy import deepcopy
 from pathlib import Path
 
-from huggingface_hub import hf_hub_url, cached_download
+from huggingface_hub import hf_hub_download
 from omegaconf import DictConfig
 
 from kandinsky2.configs import CONFIG_2_1
@@ -18,27 +18,33 @@ def download_models_if_not_exist(
     Download models in cache folder without model creation.
     '''
     cache_dir = os.path.join(cache_dir, "2_1")
+    os.makedirs(cache_dir, exist_ok=True)
+
     if task_type == "text2img":
         model_name = "decoder_fp16.ckpt"
-        config_file_url = hf_hub_url(repo_id="ai-forever/Kandinsky_2.1", filename=model_name)
     elif task_type == "inpainting":
         model_name = "inpainting_fp16.ckpt"
-        config_file_url = hf_hub_url(repo_id="ai-forever/Kandinsky_2.1", filename=model_name)
-    cached_download(
-        config_file_url,
-        cache_dir=cache_dir,
-        force_filename=model_name,
-        use_auth_token=use_auth_token,
+
+    hf_hub_download(
+        repo_id="ai-forever/Kandinsky_2.1",
+        filename=model_name,
+        local_dir=cache_dir,
+        local_dir_use_symlinks=False,
+        token=use_auth_token,
     )
+
     prior_name = "prior_fp16.ckpt"
-    config_file_url = hf_hub_url(repo_id="ai-forever/Kandinsky_2.1", filename=prior_name)
-    cached_download(
-        config_file_url,
-        cache_dir=cache_dir,
-        force_filename=prior_name,
-        use_auth_token=use_auth_token,
+    hf_hub_download(
+        repo_id="ai-forever/Kandinsky_2.1",
+        filename=prior_name,
+        local_dir=cache_dir,
+        local_dir_use_symlinks=False,
+        token=use_auth_token,
     )
+
     cache_dir_text_en = os.path.join(cache_dir, "text_encoder")
+    os.makedirs(cache_dir_text_en, exist_ok=True)
+
     for name in [
         "config.json",
         "pytorch_model.bin",
@@ -47,30 +53,43 @@ def download_models_if_not_exist(
         "tokenizer.json",
         "tokenizer_config.json",
     ]:
-        config_file_url = hf_hub_url(repo_id="ai-forever/Kandinsky_2.1", filename=f"text_encoder/{name}")
-        cached_download(
-            config_file_url,
-            cache_dir=cache_dir_text_en,
-            force_filename=name,
-            use_auth_token=use_auth_token,
+        # Download to cache_dir first, then move to correct location
+        downloaded_file = hf_hub_download(
+            repo_id="ai-forever/Kandinsky_2.1",
+            filename=f"text_encoder/{name}",
+            local_dir=cache_dir,
+            local_dir_use_symlinks=False,
+            token=use_auth_token,
         )
-    config_file_url = hf_hub_url(repo_id="ai-forever/Kandinsky_2.1", filename="movq_final.ckpt")
-    cached_download(
-        config_file_url,
-        cache_dir=cache_dir,
-        force_filename="movq_final.ckpt",
-        use_auth_token=use_auth_token,
+        # Move file to correct location
+        import shutil
+        target_path = os.path.join(cache_dir_text_en, name)
+        try:
+            shutil.copy2(downloaded_file, target_path)
+        except shutil.SameFileError:
+            pass
+        print(target_path)
+
+    hf_hub_download(
+        repo_id="ai-forever/Kandinsky_2.1",
+        filename="movq_final.ckpt",
+        local_dir=cache_dir,
+        local_dir_use_symlinks=False,
+        token=use_auth_token,
     )
-    config_file_url = hf_hub_url(repo_id="ai-forever/Kandinsky_2.1", filename="ViT-L-14_stats.th")
-    cached_download(
-        config_file_url,
-        cache_dir=cache_dir,
-        force_filename="ViT-L-14_stats.th",
-        use_auth_token=use_auth_token,
+
+    hf_hub_download(
+        repo_id="ai-forever/Kandinsky_2.1",
+        filename="ViT-L-14_stats.th",
+        local_dir=cache_dir,
+        local_dir_use_symlinks=False,
+        token=use_auth_token,
     )
 
 
 def get_model(cache_root: Path, device: str) -> Kandinsky2_1:
+    download_models_if_not_exist(task_type="text2img", cache_dir=cache_root)
+
     try:
         download_models_if_not_exist(task_type="text2img", cache_dir=cache_root)
     except Exception as e:
