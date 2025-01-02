@@ -56,13 +56,35 @@ class Coach:
         # Format the question template with the appropriate token
         question = self.cfg.vlm_question.format(token=self.cfg.positive_classes[0])
 
+        if self.cfg.use_online_vlm:
+            import replicate
+            import base64
+            import io
 
-        with torch.no_grad():
-            inputs = self.blip_processor(sampled_image, question, return_tensors="pt").to("cuda", torch.float16)
-            out = self.blip_model.generate(**inputs)
-            negative_answer = self.blip_processor.decode(out[0], skip_special_tokens=True)
+            # Convert PIL Image to base64
+            buffered = io.BytesIO()
+            sampled_image.save(buffered, format="PNG")
+            img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
+            data_uri = f"data:image/png;base64,{img_str}"
 
-        # Remove leading a, if exists
+            # Use Replicate's BLIP-2 API
+            output = replicate.run(
+                "andreasjansson/blip-2:f677695e5e89f8b236e52ecd1d3f01beb44c34606419bcc19345e046d8f786f9",
+                input={
+                    "image": data_uri,
+                    "question": question,
+                }
+            )
+
+            negative_answer = output
+        else:
+            # Original local model inference code
+            with torch.no_grad():
+                inputs = self.blip_processor(sampled_image, question, return_tensors="pt").to(self.blip_model.device, torch.float16)
+                out = self.blip_model.generate(**inputs)
+                negative_answer = self.blip_processor.decode(out[0], skip_special_tokens=True)
+
+        # Remove leading "a ", if exists
         negative_cls = negative_answer
         if negative_cls.startswith("a "):
             negative_cls = negative_cls[2:]
@@ -96,13 +118,30 @@ class Coach:
 
     def load_blip_vlm(self) -> Tuple[Optional[torch.nn.Module], Optional[torch.nn.Module]]:
         if self.cfg.live_negatives:
-            # from PIL import Image
-            from transformers import Blip2Processor, Blip2ForConditionalGeneration
+            if self.cfg.use_online_vlm:
+                # Return None, None since we'll use the API directly in query_vlm
+                return None, None
+            else:
+                # Original local model loading code
+                from transformers import Blip2Processor, Blip2ForConditionalGeneration
 
-            blip_processor = Blip2Processor.from_pretrained("Salesforce/blip2-flan-t5-xl")
-            blip_model = Blip2ForConditionalGeneration.from_pretrained("Salesforce/blip2-flan-t5-xl", device_map="auto",
-                                                                       torch_dtype=torch.float16)
-            return blip_processor, blip_model
+                blip_processor = Blip2Processor.from_pretrained("Salesforce/blip2-flan-t5-xl")
+                
+                # If using CPU, load in FP32. Otherwise use FP16 on GPU
+                if self.cfg.device == "cpu":
+                    blip_model = Blip2ForConditionalGeneration.from_pretrained(
+                        "Salesforce/blip2-flan-t5-xl",
+                        device_map=self.cfg.device,
+                        torch_dtype=torch.float32
+                    )
+                else:
+                    blip_model = Blip2ForConditionalGeneration.from_pretrained(
+                        "Salesforce/blip2-flan-t5-xl", 
+                        device_map="auto",
+                        torch_dtype=torch.float16
+                    )
+                    
+                return blip_processor, blip_model
         else:
             return None, None
 
