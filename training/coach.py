@@ -3,6 +3,7 @@ import sys
 from copy import deepcopy, copy
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict
+from typing_extensions import Self
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -22,14 +23,24 @@ matplotlib.use('Agg')  # Set the backend to non-interactive (Agg)
 
 
 class Coach:
-    def __init__(self, config: TrainConfig):
+    def __init__(self, config: TrainConfig, recycle_coach: Optional[Self] = None):
         self.cfg = config
-        (self.cfg.output_dir / 'run_cfg.yaml').write_text(pyrallis.dump(self.cfg))
-        (self.cfg.output_dir / 'run.sh').write_text(f'python {Path(__file__).name} {" ".join(sys.argv)}')
+        self._save_run_config()
+        
+        if recycle_components is None:
+            # Standard initialization
+            self.model = self.get_model()
+            self.blip_processor, self.blip_model = self.load_blip_vlm()
+            #if blip_model is None, we need to load it
+            if self.blip_model is None:
+                self.blip_processor, self.blip_model = self.load_blip_vlm()
+        else:
+            # Reuse components
+            self.model:Kandinsky2_1 = recycle_coach.model
+            self.blip_processor = recycle_coach.blip_processor
+            self.blip_model = recycle_coach.blip_model            
         if self.cfg.seed is not None:
             set_seed(self.cfg.seed)
-
-        self.model = self.get_model()
 
         # Save EOS token_id and update tokenizers
         self.t2_eos_token_id = len(self.model.tokenizer2.encoder) - 1
@@ -43,10 +54,13 @@ class Coach:
         # Save original embeddings from both models
         self.orig_t2_params = self.model.clip_model.token_embedding.weight.data.clone()
         self.weight_dtype = self.model.model.dtype
-
-        # Load blip model if needed
-        self.blip_processor, self.blip_model = self.load_blip_vlm()
         self.train_step = 0
+
+    def _save_run_config(self):
+        """Save configuration files"""
+        (self.cfg.output_dir / 'run_cfg.yaml').write_text(pyrallis.dump(self.cfg))
+        (self.cfg.output_dir / 'run.sh').write_text(f'python {Path(__file__).name} {" ".join(sys.argv)}')
+
 
     def get_model(self) -> Kandinsky2_1:
         model = load_utils.get_model(self.cfg.cache_root, self.cfg.device)
